@@ -77,48 +77,15 @@ def obtener_dni_disponible(credenciales):
 class SunarpScraper(BaseScraper):
     """
     Scraper oficial de SUNARP integrado con Chaskitambo.
-    - Normaliza partidas (incluso si vienen como string de lista `['123']`).
-    - Resuelve automáticamente la oficina registral mediante el módulo externo.
-    - Controla el tiempo máximo de sesión (9 minutos), rotación de DNI y manejo de reintentos.
+    - Normaliza partidas (soporta cadenas separadas por espacios o listas).
+    - Resolución nativa del expediente inyectado por el motor.
+    - Resolución automática de oficinas con el módulo externo 'oficina_registral.py'.
+    - Controla el tiempo máximo de sesión (9 minutos), rotación de DNI y reintentos.
     """
-    def __init__(self, partida_objetivo: Any = None, expediente: Any = None, **kwargs):
-        logger.info(f" [DEBUG-SUNARP] --- INSPECCIONANDO CONTEXTO DE INSTANCIA ---")
-        logger.info(f" [DEBUG-SUNARP] Atributos disponibles en self: {list(self.__dict__.keys())}")
-        logger.info(f" [DEBUG-SUNARP] kwargs recibidos del YAML: {list(kwargs.keys())}")
-        
-        resolved_expediente = None
-        
-        # 1. Buscar en los atributos que Chaskitambo inyecta en self
-        for attr_name, attr_val in self.__dict__.items():
-            if isinstance(attr_val, str) and re.search(r'\d{5}-\d{4}', attr_val):
-                resolved_expediente = attr_val
-                logger.info(f" [DEBUG-SUNARP] Hallado en atributo self.{attr_name}: {resolved_expediente}")
-                break
-            elif isinstance(attr_val, dict):
-                if "expediente" in attr_val and isinstance(attr_val["expediente"], str):
-                    resolved_expediente = attr_val["expediente"]
-                    logger.info(f" [DEBUG-SUNARP] Hallado en dict self.{attr_name}['expediente']: {resolved_expediente}")
-                    break
-                if "detalle" in attr_val and isinstance(attr_val["detalle"], dict):
-                    if "expediente" in attr_val["detalle"]:
-                        resolved_expediente = attr_val["detalle"]["expediente"]
-                        logger.info(f" [DEBUG-SUNARP] Hallado en self.{attr_name}['detalle']['expediente']: {resolved_expediente}")
-                        break
-
-        # 2. Si aún no se encuentra, revisar si viene en kwargs
-        if not resolved_expediente:
-            for k, v in kwargs.items():
-                if isinstance(v, str) and re.search(r'\d{5}-\d{4}', v):
-                    resolved_expediente = v
-                    logger.info(f" [DEBUG-SUNARP] Hallado in kwargs['{k}']: {resolved_expediente}")
-                    break
-
-        self.expediente = resolved_expediente
-        logger.info(f" [DEBUG-SUNARP] Expediente final asignado a self.expediente: {self.expediente!r}")
-        logger.info(f" [DEBUG-SUNARP] -----------------------------------------------")
-        
+    def __init__(self, partida_objetivo: Any = None, **kwargs):
         self.partida_objetivo = self._normalizar_partidas(partida_objetivo)
-
+        self.expediente = kwargs.get("expediente")
+    
     def _normalizar_partidas(self, raw_partidas) -> List[str]:
         if not raw_partidas:
             return []
@@ -133,44 +100,77 @@ class SunarpScraper(BaseScraper):
                 except Exception:
                     raw_partidas = re.findall(r'[\w\-]+', raw_partidas)
             else:
-                raw_partidas = re.findall(r'[\w\-]+', raw_partidas)
-                
+                # Maneja partidas múltiples separadas por espacios o comas (ej. "12331 123322")
+                if " " in raw_partidas or "," in raw_partidas:
+                    raw_partidas = re.split(r'[\s,]+', raw_partidas)
+                else:
+                    raw_partidas = re.findall(r'[\w\-]+', raw_partidas)
+                    
         if isinstance(raw_partidas, list):
-            return [str(p).strip().strip("'\"") for p in raw_partidas if p]
+            return [str(p).strip().strip("'\"") for p in raw_partidas if p and str(p).strip() != "None"]
             
         return [str(raw_partidas).strip()]
 
     async def extract(self) -> AsyncGenerator[ChaskiDocument, None]:
         try:
-            # 1. Resolución segura del expediente
-            resolved_exp = getattr(self, "id", None) or getattr(self, "id_externo", None)
-            
+            # 1. Comunicación nativa con el motor: lectura de ID principal, id_externo o atributos directos
+            resolved_exp = getattr(self, "id", None) or getattr(self, "id_externo", None) or self.expediente
+
+            # 2. Búsqueda profunda en diccionarios internos (metadatos, item, parent, etc.) si fuera necesario
             if not resolved_exp:
-                for attr in ["expediente", "documento_principal", "item", "metadatos", "contexto", "payload"]:
-                    val = getattr(self, attr, None)
-                    if isinstance(val, str) and len(val) > 5:
-                        resolved_exp = val
-                        break
-                    elif isinstance(val, dict):
-                        resolved_exp = val.get("expediente") or (val.get("detalle", {}) or {}).get("expediente")
+                for attr_name in ["metadatos", "item", "documento", "parent", "payload", "contexto", "detalle"]:
+                    val = getattr(self, attr_name, None)
+                    if isinstance(val, dict):
+                        resolved_exp = val.get("expediente") or val.get("detalle", {}).get("expediente")
                         if resolved_exp:
                             break
 
-            if resolved_exp:
-                self.expediente = resolved_exp
+            # 3. Búsqueda por expresión regular en todos los strings de self.__dict__
+            if not resolved_exp:
+                for k, v in self.__dict__.items():
+                    if isinstance(v, str) and re.search(r'\d{5}-\d{4}-\d-\d{4}-', v):
+                        resolved_exp = v
+                        break
+                    elif isinstance(v, dict):
+                        for sub_k, sub_v in v.items():
+                            if isinstance(sub_v, str) and re.search(r'\d{5}-\d{4}-\d-\d{4}-', sub_v):
+                                resolved_exp = sub_v
+                                break
+                    if resolved_exp:
+                        break
 
-            logger.info(f" -> [SUNARP-PLUGIN v1] Partidas listas: {getattr(self, 'partida_objetivo', None)} | Expediente: {self.expediente}")
+            self.expediente = resolved_exp
+            logger.info(f" -> [SUNARP-PLUGIN] Partidas listas: {getattr(self, 'partida_objetivo', None)} | Expediente resuelto: {self.expediente}")
 
             if not getattr(self, "partida_objetivo", None):
                 logger.error("[-] [SUNARP-PLUGIN] No se proporcionó ninguna 'partida_objetivo' válida.")
                 return
 
-            # 2. Resolución de oficina con el módulo externo y control de revisión manual
+            # 4. Si el expediente sigue siendo nulo, se registra en revisión manual con detalle
+            if not self.expediente:
+                logger.warning(f"[-] [REVISIÓN MANUAL] Expediente no detectado en el contexto del enriquecedor. Derivando a carpeta externa.")
+                CARPETA_REVISION_MANUAL.mkdir(parents=True, exist_ok=True)
+                
+                registro_revision = {
+                    "expediente": None,
+                    "partidas_objetivo": getattr(self, "partida_objetivo", []),
+                    "motivo": "Expediente nulo: no se encontró en atributos ni metadatos inyectados por Chaskitambo",
+                    "fecha_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "atributos_disponibles": list(self.__dict__.keys())
+                }
+                
+                nombre_archivo = f"expediente_nulo_{int(time.time())}.json"
+                ruta_salida = CARPETA_REVISION_MANUAL / nombre_archivo
+                ruta_salida.write_text(json.dumps(registro_revision, indent=4, ensure_ascii=False), encoding="utf-8")
+                
+                logger.info(f"[OK] Registro de depuración guardado en {ruta_salida}.")
+                return
+
+            # 5. Resolución de la oficina registral mediante el módulo externo
             nombre_oficina = obtener_nombre_oficina(self.expediente)
             
             if not nombre_oficina:
                 logger.warning(f"[-] [REVISIÓN MANUAL] Expediente con código no mapeado: {self.expediente}. Derivando a carpeta externa.")
-                
                 CARPETA_REVISION_MANUAL.mkdir(parents=True, exist_ok=True)
                 
                 registro_revision = {
@@ -180,25 +180,13 @@ class SunarpScraper(BaseScraper):
                     "fecha_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 
-                exp_str = str(self.expediente or "desconocido").replace('/', '_').replace('-', '_')
+                exp_str = str(self.expediente).replace('/', '_').replace('-', '_')
                 ruta_salida = CARPETA_REVISION_MANUAL / f"expediente_{exp_str}.json"
                 ruta_salida.write_text(json.dumps(registro_revision, indent=4, ensure_ascii=False), encoding="utf-8")
-                
-                logger.info(f"[OK] Expediente guardado en {ruta_salida}. Omitiendo scraping de Sunarp.")
                 return
 
             area = "PROPIEDAD INMUEBLE PREDIAL"
-            
-            # Normalizar partida_objetivo por si llega como string plano o lista
-            raw_partidas = self.partida_objetivo
-            if isinstance(raw_partidas, str):
-                try:
-                    import ast
-                    raw_partidas = ast.literal_eval(raw_partidas)
-                except Exception:
-                    raw_partidas = [raw_partidas]
-            
-            partidas_pendientes = list(raw_partidas)
+            partidas_pendientes = list(self.partida_objetivo)
 
         except Exception as e:
             logger.error(f"[-] ERROR CRÍTICO EN INICIALIZACIÓN DE EXTRACT: {e}")
