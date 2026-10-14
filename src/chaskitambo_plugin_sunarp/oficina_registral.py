@@ -68,7 +68,8 @@ MAPEO_CORTE_JUDICIAL_SUNARP = {
     "2701": "MADRE DE DIOS",  # Madre de Dios
     "2204": "JUANJUI",  # Juanjuí
     "2202": "TARAPOTO",  # Tarapoto
-    "2205": "YURIMAGUAS"  # Yurimaguas
+    "2205": "YURIMAGUAS",  # Yurimaguas
+    "1707": "LAMBAYEQUE",  # Lambayeque
 }   
 
 def obtener_nombre_oficina(expediente: str) -> str | None:

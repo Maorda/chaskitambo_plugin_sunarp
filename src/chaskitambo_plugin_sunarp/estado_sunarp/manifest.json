@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "actualizado_en": "2026-10-14T00:47:44-05:00",
+  "partidas": {
+    "[\"LIMA\", \"PROPIEDAD INMUEBLE PREDIAL\", \"14443925\", \"00225-2026-0-1828-JR-CO-04\"]": {
+      "oficina_registral": "LIMA",
+      "area_registral": "PROPIEDAD INMUEBLE PREDIAL",
+      "partida_registral": "14443925",
+      "expediente": "00225-2026-0-1828-JR-CO-04",
+      "estado": "completada",
+      "asientos": {
+        "8": {
+          "asiento": "8",
+          "descripcion": "Acto: AMPLIACION DE HIPOTECA ( PROPIEDAD ); Año: 2023; Rubro: ; Páginas: 1",
+          "estado": "descargado",
+          "archivo": "D:\\libs\\chaskitambo_plugin_sunarp\\src\\chaskitambo_plugin_sunarp\\descargas_sunarp\\sunarp_14443925_asiento_8.pdf",
+          "tamano_bytes": 176431,
+          "motivo": null,
+          "creado_en": "2026-10-14T00:47:31-05:00",
+          "actualizado_en": "2026-10-14T00:47:33-05:00"
+        },
+        "7": {
+          "asiento": "7",
+          "descripcion": "Acto: HIPOTECA ( PROPIEDAD ); Año: 2022; Rubro: ; Páginas: 1",
+          "estado": "descargado",
+          "archivo": "D:\\libs\\chaskitambo_plugin_sunarp\\src\\chaskitambo_plugin_sunarp\\descargas_sunarp\\sunarp_14443925_asiento_7.pdf",
+          "tamano_bytes": 188786,
+          "motivo": null,
+          "creado_en": "2026-10-14T00:47:31-05:00",
+          "actualizado_en": "2026-10-14T00:47:34-05:00"
+        },
+        "6": {
+          "asiento": "6",
+          "descripcion": "Acto: LEVANTAMIENTO DE HIPOTECA; Año: 2021; Rubro: ; Páginas: 1, 2, 3",
+          "estado": "descargado",
+          "archivo": "D:\\libs\\chaskitambo_plugin_sunarp\\src\\chaskitambo_plugin_sunarp\\descargas_sunarp\\sunarp_14443925_asiento_6.pdf",
+          "tamano_bytes": 176286,
+          "motivo": null,
+          "creado_en": "2026-10-14T00:47:31-05:00",
+          "actualizado_en": "2026-10-14T00:47:36-05:00"
+        },
+        "5": {
+          "asiento": "5",
+          "descripcion": "Acto: LEVANTAMIENTO DE HIPOTECA; Año: 2021; Rubro: ; Páginas: 1, 2",
+          "estado": "descargado",
+          "archivo": "D:\\libs\\chaskitambo_plugin_sunarp\\src\\chaskitambo_plugin_sunarp\\descargas_sunarp\\sunarp_14443925_asiento_5.pdf",
+          "tamano_bytes": 173526,
+          "motivo": null,
+          "creado_en": "2026-10-14T00:47:31-05:00",
+          "actualizado_en": "2026-10-14T00:47:38-05:00"
+        },
+        "4": {
+          "asiento": "4",
+          "descripcion": "Acto: LEVANTAMIENTO DE HIPOTECA; Año: 2021; Rubro: ; Páginas: 1",
+          "estado": "descargado",
+          "archivo": "D:\\libs\\chaskitambo_plugin_sunarp\\src\\chaskitambo_plugin_sunarp\\descargas_sunarp\\sunarp_14443925_asiento_4.pdf",
+          "tamano_bytes": 176286,
+          "motivo": null,
+          "creado_en": "2026-10-14T00:47:31-05:00",
+          "actualizado_en": "2026-10-14T00:47:39-05:00"
+        },
+        "3": {
+          "asiento": "3",
+          "descripcion": "Acto: LEVANTAMIENTO DE HIPOTECA; Año: 2021; Rubro: ; Páginas: 1",
+          "estado": "descargado",
+          "archivo": "D:\\libs\\chaskitambo_plugin_sunarp\\src\\chaskitambo_plugin_sunarp\\descargas_sunarp\\sunarp_14443925_asiento_3.pdf",
+          "tamano_bytes": 162389,
+          "motivo": null,
+          "creado_en": "2026-10-14T00:47:31-05:00",
+          "actualizado_en": "2026-10-14T00:47:41-05:00"
+        },
+        "2": {
+          "asiento": "2",
+          "descripcion": "Acto: LEVANTAMIENTO DE HIPOTECA; Año: 2021; Rubro: ; Páginas: 1",
+          "estado": "descargado",
+          "archivo": "D:\\libs\\chaskitambo_plugin_sunarp\\src\\chaskitambo_plugin_sunarp\\descargas_sunarp\\sunarp_14443925_asiento_2.pdf",
+          "tamano_bytes": 157838,
+          "motivo": null,
+          "creado_en": "2026-10-14T00:47:31-05:00",
+          "actualizado_en": "2026-10-14T00:47:42-05:00"
+        },
+        "1": {
+          "asiento": "1",
+          "descripcion": "Acto: INDEPENDIZACION; Año: 2019; Rubro: ; Páginas: 1, 2",
+          "estado": "descargado",
+          "archivo": "D:\\libs\\chaskitambo_plugin_sunarp\\src\\chaskitambo_plugin_sunarp\\descargas_sunarp\\sunarp_14443925_asiento_1.pdf",
+          "tamano_bytes": 314682,
+          "motivo": null,
+          "creado_en": "2026-10-14T00:47:31-05:00",
+          "actualizado_en": "2026-10-14T00:47:44-05:00"
+        }
+      },
+      "motivo": null,
+      "creado_en": "2026-10-14T00:28:57-05:00",
+      "actualizado_en": "2026-10-14T00:47:44-05:00",
+      "ejecucion_id": "a68b8a2ead014bdb9f6f6583b884a537",
+      "pid_proceso": 10988,
+      "inicio_procesamiento_en": "2026-10-14T00:47:07-05:00",
+      "heartbeat_en": "2026-10-14T00:47:44-05:00",
+      "finalizacion_en": "2026-10-14T00:47:44-05:00"
+    }
+  }
+}

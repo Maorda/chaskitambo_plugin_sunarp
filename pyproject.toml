@@ -21,8 +21,8 @@ packages = ["src/chaskitambo_plugin_sunarp"]
 # se incluyan dentro de la distribución del paquete instalado.
 [tool.hatch.build.targets.wheel.options]
 artifacts = [
-    "src/chaskitambo_plugin_sunarp/oficina_registral.json",
     "src/chaskitambo_plugin_sunarp/credenciales.json",
+    "src/chaskitambo_plugin_sunarp/sunarp_local.json",
     
 ]
 
