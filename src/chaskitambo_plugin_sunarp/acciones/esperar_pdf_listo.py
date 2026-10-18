@@ -1,11 +1,11 @@
 
-# Archivo:
-# D:\libs\chaskitambo_plugin_sunarp\src\chaskitambo_plugin_sunarp\acciones\esperar_pdf_listo.py
+# Archivo: D:\libs\chaskitambo_plugin_sunarp\src\chaskitambo_plugin_sunarp\acciones\esperar_pdf_listo.py
 
 from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 import nodriver as uc
 
@@ -15,17 +15,66 @@ TIEMPO_MAX_ESPERA_PDF = 25 * 60
 INTERVALO_COMPROBACION_MS = 250
 
 
+def _detalle_error_nodriver(resultado: Any) -> str:
+    """Extrae detalles útiles de ExceptionDetails u otras respuestas."""
+    excepcion = getattr(resultado, "exception", None)
+
+    if excepcion is not None:
+        descripcion = getattr(excepcion, "description", None)
+        if descripcion:
+            return str(descripcion)
+
+    texto = getattr(resultado, "text", None)
+    if texto:
+        return str(texto)
+
+    return repr(resultado)
+
+
+def _decodificar_respuesta(resultado: Any, operacion: str) -> dict:
+    """Normaliza las respuestas de evaluate de Nodriver."""
+    if isinstance(resultado, dict):
+        return resultado
+
+    if isinstance(resultado, str):
+        try:
+            datos = json.loads(resultado)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"{operacion}: Nodriver devolvió texto que no es JSON. "
+                f"Respuesta={resultado[:1000]!r}"
+            ) from exc
+
+        if isinstance(datos, dict):
+            return datos
+
+        raise RuntimeError(
+            f"{operacion}: el JSON recibido no es un objeto."
+        )
+
+    raise RuntimeError(
+        f"{operacion}: respuesta inesperada de Nodriver. "
+        f"Tipo={type(resultado).__module__}."
+        f"{type(resultado).__qualname__}; "
+        f"detalle={_detalle_error_nodriver(resultado)}"
+    )
+
+
 async def preparar_espera_pdf(page: uc.Tab) -> None:
-    """Instala la observación del visor antes de seleccionar una página."""
+    """
+    Instala un observador antes de seleccionar una página.
+
+    PDFViewerApplication y pdfDocument pueden no estar disponibles todavía.
+    Esa ausencia inicial no se considera un error: la espera posterior
+    comprobará cuándo aparece el documento PDF.
+    """
     script = r"""
     (() => {
-        const app = window.PDFViewerApplication;
-        if (!app) {
-            throw new Error("PDFViewerApplication no está disponible.");
-        }
-
         const anterior = window.__sunarpPdfWait;
-        if (anterior?.observer) anterior.observer.disconnect();
+
+        if (anterior?.observer) {
+            anterior.observer.disconnect();
+        }
 
         const spinnerVisible = () => {
             return Array.from(
@@ -33,6 +82,7 @@ async def preparar_espera_pdf(page: uc.Tab) -> None:
             ).some(elemento => {
                 const estilo = getComputedStyle(elemento);
                 const rect = elemento.getBoundingClientRect();
+
                 return estilo.display !== "none"
                     && estilo.visibility !== "hidden"
                     && Number(estilo.opacity) > 0
@@ -41,14 +91,21 @@ async def preparar_espera_pdf(page: uc.Tab) -> None:
             });
         };
 
+        const appInicial = window.PDFViewerApplication ?? null;
+        const documentoInicial = appInicial?.pdfDocument ?? null;
+
         const estado = {
-            documentoInicial: app.pdfDocument ?? null,
+            appInicial,
+            documentoInicial,
             spinnerVisto: spinnerVisible(),
-            observer: null
+            observer: null,
+            preparadoEn: Date.now()
         };
 
         estado.observer = new MutationObserver(() => {
-            if (spinnerVisible()) estado.spinnerVisto = true;
+            if (spinnerVisible()) {
+                estado.spinnerVisto = true;
+            }
         });
 
         estado.observer.observe(document.documentElement, {
@@ -61,62 +118,41 @@ async def preparar_espera_pdf(page: uc.Tab) -> None:
 
         return JSON.stringify({
             ok: true,
-            documentoInicialDisponible: !!estado.documentoInicial
+            aplicacionInicialDisponible: !!appInicial,
+            documentoInicialDisponible: !!documentoInicial,
+            spinnerInicialVisible: estado.spinnerVisto
         });
     })()
     """
 
-    resultado = await page.evaluate(
-        script,
-        await_promise=True,
-        return_by_value=True,
+    try:
+        resultado = await page.evaluate(
+            script,
+            await_promise=True,
+            return_by_value=True,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"No se pudo instalar el observador del visor PDF: {exc}"
+        ) from exc
+
+    datos = _decodificar_respuesta(
+        resultado,
+        "Preparación del visor PDF",
     )
 
-    if isinstance(resultado, dict):
-        datos = resultado
-
-    elif isinstance(resultado, str):
-        try:
-            datos = json.loads(resultado)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                "El visor devolvió una cadena que no es JSON. "
-                f"Respuesta={resultado[:1000]!r}"
-            ) from exc
-
-    else:
-        tipo = (
-            f"{type(resultado).__module__}."
-            f"{type(resultado).__qualname__}"
-        )
-
-        descripcion = getattr(resultado, "text", None)
-        excepcion = getattr(resultado, "exception", None)
-
-        if excepcion is not None:
-            detalle = getattr(excepcion, "description", None)
-            if detalle:
-                descripcion = detalle
-
-        logger.error(
-            "Respuesta inesperada al preparar el visor PDF. "
-            "Tipo=%s; respuesta=%r; detalle=%r",
-            tipo,
-            resultado,
-            descripcion,
-        )
-
-        raise RuntimeError(
-            "No se pudo preparar el visor PDF. "
-            f"Tipo de respuesta={tipo}; detalle={descripcion!r}"
-        )
-
     if not datos.get("ok"):
-        raise RuntimeError("No se pudo preparar la espera del visor PDF.")
+        raise RuntimeError(
+            "No se pudo instalar el observador del visor PDF: "
+            f"{datos!r}"
+        )
 
-    logger.debug(
-        "Observador PDF instalado; documento inicial disponible=%s.",
+    logger.info(
+        "[PDF] Observador instalado. "
+        "Aplicación inicial=%s; documento inicial=%s; spinner inicial=%s.",
+        datos.get("aplicacionInicialDisponible"),
         datos.get("documentoInicialDisponible"),
+        datos.get("spinnerInicialVisible"),
     )
 
 
@@ -124,7 +160,13 @@ async def esperar_pdf_listo(
     page: uc.Tab,
     timeout_seconds: int = TIEMPO_MAX_ESPERA_PDF,
 ) -> dict[str, int | bool]:
-    """Espera el cambio al documento PDF nuevo y comprueba su disponibilidad."""
+    """
+    Espera hasta detectar un documento PDF válido distinto del inicial.
+
+    No considera suficiente que exista PDFViewerApplication: también
+    exige pdfDocument, getData(), un número de páginas válido y que
+    el spinner no esté visible.
+    """
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds debe ser mayor que cero.")
 
@@ -133,13 +175,21 @@ async def esperar_pdf_listo(
         "intervalo_ms": INTERVALO_COMPROBACION_MS,
     }
 
+    parametros_json = json.dumps(parametros)
+
     script = f"""
     (async () => {{
-        const parametros = JSON.parse({json.dumps(json.dumps(parametros))});
+        const parametros = JSON.parse(
+            {json.dumps(parametros_json)}
+        );
+
         const estado = window.__sunarpPdfWait;
 
         if (!estado) {{
-            throw new Error("No se preparó el observador antes del clic.");
+            return JSON.stringify({{
+                ok: false,
+                error: "No se instaló el observador antes de seleccionar la página."
+            }});
         }}
 
         const spinnerVisible = () => {{
@@ -148,6 +198,7 @@ async def esperar_pdf_listo(
             ).some(elemento => {{
                 const estilo = getComputedStyle(elemento);
                 const rect = elemento.getBoundingClientRect();
+
                 return estilo.display !== "none"
                     && estilo.visibility !== "hidden"
                     && Number(estilo.opacity) > 0
@@ -160,37 +211,59 @@ async def esperar_pdf_listo(
 
         try {{
             while (Date.now() - inicio < parametros.timeout_ms) {{
-                const app = window.PDFViewerApplication;
+                const app = window.PDFViewerApplication ?? null;
                 const doc = app?.pdfDocument ?? null;
                 const cargando = spinnerVisible();
 
-                const documentoNuevo = !!doc
-                    && doc !== estado.documentoInicial
+                if (cargando) {{
+                    estado.spinnerVisto = true;
+                }}
+
+                const documentoDisponible =
+                    !!doc
                     && typeof doc.getData === "function"
                     && Number.isInteger(doc.numPages)
                     && doc.numPages > 0;
+
+                const documentoNuevo =
+                    documentoDisponible
+                    && doc !== estado.documentoInicial;
 
                 if (documentoNuevo && !cargando) {{
                     try {{
                         await doc.getPage(1);
 
+                        const appActual =
+                            window.PDFViewerApplication ?? null;
+
+                        const docActual = appActual?.pdfDocument ?? null;
+
                         if (
-                            window.PDFViewerApplication?.pdfDocument === doc
+                            docActual === doc
+                            && typeof docActual.getData === "function"
+                            && Number.isInteger(docActual.numPages)
+                            && docActual.numPages > 0
                             && !spinnerVisible()
                         ) {{
                             const resultado = {{
                                 ok: true,
-                                paginas: doc.numPages,
+                                paginas: docActual.numPages,
                                 duracionMs: Date.now() - inicio,
-                                spinnerVisto: estado.spinnerVisto
+                                spinnerVisto: estado.spinnerVisto,
+                                aplicacionInicialDisponible:
+                                    !!estado.appInicial,
+                                documentoInicialDisponible:
+                                    !!estado.documentoInicial,
+                                documentoNuevo: true
                             }};
 
                             estado.observer?.disconnect();
                             window.__sunarpPdfWait = null;
+
                             return JSON.stringify(resultado);
                         }}
                     }} catch (error) {{
-                        // PDF.js puede seguir inicializando el documento.
+                        // El visor puede estar inicializando la primera página.
                     }}
                 }}
 
@@ -199,42 +272,60 @@ async def esperar_pdf_listo(
                 );
             }}
 
-            throw new Error(
-                "Tiempo agotado o no se confirmó el cambio al nuevo PDF."
-            );
-        }} catch (error) {{
-            estado.observer?.disconnect();
-            window.__sunarpPdfWait = null;
+            const appFinal = window.PDFViewerApplication ?? null;
+            const docFinal = appFinal?.pdfDocument ?? null;
 
             return JSON.stringify({{
                 ok: false,
-                error: String(error)
+                error:
+                    "Tiempo agotado sin confirmar un documento PDF nuevo y listo.",
+                aplicacionDisponible: !!appFinal,
+                documentoDisponible: !!docFinal,
+                getDataDisponible:
+                    typeof docFinal?.getData === "function",
+                paginas: docFinal?.numPages ?? null,
+                spinnerVisible: spinnerVisible(),
+                spinnerVisto: estado.spinnerVisto,
+                documentoSigueSiendoElInicial:
+                    !!docFinal && docFinal === estado.documentoInicial,
+                duracionMs: Date.now() - inicio
             }});
+        }} finally {{
+            estado.observer?.disconnect();
+            window.__sunarpPdfWait = null;
         }}
     }})()
     """
 
-    resultado = await page.evaluate(
-        script,
-        await_promise=True,
-        return_by_value=True,
-    )
+    try:
+        resultado = await page.evaluate(
+            script,
+            await_promise=True,
+            return_by_value=True,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Nodriver no pudo esperar la carga del PDF: {exc}"
+        ) from exc
 
-    if isinstance(resultado, dict):
-        datos = resultado
-    elif isinstance(resultado, str):
-        datos = json.loads(resultado)
-    else:
-        raise RuntimeError("Respuesta inesperada durante la espera del PDF.")
+    datos = _decodificar_respuesta(
+        resultado,
+        "Espera del visor PDF",
+    )
 
     if not datos.get("ok"):
         raise RuntimeError(
-            str(datos.get("error", "No se pudo confirmar la carga del PDF."))
+            "No se confirmó la carga del PDF. "
+            f"Diagnóstico={json.dumps(datos, ensure_ascii=False)}"
         )
 
     logger.info(
-        "Visor listo: páginas=%s; duración=%s ms.",
+        "[PDF] Visor listo: páginas=%s; duración=%s ms; "
+        "spinner visto=%s; documento inicial disponible=%s.",
         datos.get("paginas"),
         datos.get("duracionMs"),
+        datos.get("spinnerVisto"),
+        datos.get("documentoInicialDisponible"),
     )
+
     return datos
