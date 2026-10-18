@@ -1,0 +1,43 @@
+{
+  "incidencias": [
+    {
+      "partida_registral": "P24007506",
+      "expediente": null,
+      "asiento": "3",
+      "pagina": "1",
+      "estado": "error",
+      "motivo": "RuntimeError: Respuesta inesperada al preparar el visor PDF.",
+      "fecha_registro": "2026-10-18T16:42:17-05:00",
+      "ultima_fecha": "2026-10-18T17:13:32-05:00",
+      "intentos": 2,
+      "requiere_revision_manual": true,
+      "ultimo_motivo": "RuntimeError: No se pudo preparar el visor PDF. Tipo de respuesta=nodriver.cdp.runtime.ExceptionDetails; detalle='Error: PDFViewerApplication no está disponible.\\n    at <anonymous>:5:19\\n    at <anonymous>:47:7'"
+    },
+    {
+      "partida_registral": "P24007506",
+      "expediente": null,
+      "asiento": "2",
+      "pagina": "1",
+      "estado": "error",
+      "motivo": "RuntimeError: Respuesta inesperada al preparar el visor PDF.",
+      "fecha_registro": "2026-10-18T16:42:17-05:00",
+      "ultima_fecha": "2026-10-18T17:13:33-05:00",
+      "intentos": 2,
+      "requiere_revision_manual": true,
+      "ultimo_motivo": "RuntimeError: No se pudo preparar el visor PDF. Tipo de respuesta=nodriver.cdp.runtime.ExceptionDetails; detalle='Error: PDFViewerApplication no está disponible.\\n    at <anonymous>:5:19\\n    at <anonymous>:47:7'"
+    },
+    {
+      "partida_registral": "P24007506",
+      "expediente": null,
+      "asiento": "1",
+      "pagina": "1",
+      "estado": "error",
+      "motivo": "RuntimeError: Respuesta inesperada al preparar el visor PDF.",
+      "fecha_registro": "2026-10-18T16:42:17-05:00",
+      "ultima_fecha": "2026-10-18T17:13:33-05:00",
+      "intentos": 2,
+      "requiere_revision_manual": true,
+      "ultimo_motivo": "RuntimeError: No se pudo preparar el visor PDF. Tipo de respuesta=nodriver.cdp.runtime.ExceptionDetails; detalle='Error: PDFViewerApplication no está disponible.\\n    at <anonymous>:5:19\\n    at <anonymous>:47:7'"
+    }
+  ]
+}

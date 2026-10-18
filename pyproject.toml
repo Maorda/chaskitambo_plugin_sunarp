@@ -17,15 +17,62 @@ dependencies = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/chaskitambo_plugin_sunarp"]
 
-# 🎯 CRUCIAL: Asegura que los archivos de datos (JSON de oficinas y partidas) 
-# se incluyan dentro de la distribución del paquete instalado.
-[tool.hatch.build.targets.wheel.options]
-artifacts = [
-    "src/chaskitambo_plugin_sunarp/credenciales.json",
-    "src/chaskitambo_plugin_sunarp/sunarp_local.json",
-    
-]
-
 # Punto de entrada para que Chaskitambo descubra el scraper de Sunarp de forma agnóstica
 [project.entry-points."chaskitambo.plugins"]
 sunarp = "chaskitambo_plugin_sunarp.scraper:SunarpScraper"
+
+[tool.sunarp-login]
+url_inicio = "https://conoce-aqui.sunarp.gob.pe/conoce-aqui/inicio"
+url_autenticado = "https://conoce-aqui.sunarp.gob.pe/conoce-aqui/servicio/busqueda"
+
+[tool.sunarp-login.archivos]
+credenciales = "src/chaskitambo_plugin_sunarp/credenciales.json"
+
+[tool.sunarp-login.espera]
+carga_pagina = 30
+modal_terminos = 20
+desaparicion_modal = 15
+formulario = 20
+resultado_login = 60
+sondeo = 0.5
+turnstile = 120
+
+[tool.sunarp-login.escritura]
+pausa_minima = 0.08
+pausa_maxima = 0.22
+pausa_entre_campos = 0.5
+
+[tool.sunarp-login.selectores]
+modal_terminos = ".ant-modal-content"
+aceptar_terminos = "button.accept-button"
+dni = 'input[formcontrolname="numeroDocumento"]'
+digito_verificacion = 'input[formcontrolname="digito"]'
+fecha_emision = 'input[formcontrolname="fechaEmision"]'
+validar = "button.login-form-button"
+
+[tool.sunarp-login.turnstile]
+habilitado = true
+proveedor = "cloudflare"
+componente = "cloudcaptcha ngx-turnstile"
+iframe_host = "challenges.cloudflare.com"
+selector_componente = "cloudcaptcha ngx-turnstile"
+selector_respuesta = 'input[name="cf-turnstile-response"]'
+tiempo_maximo_espera = 180
+intervalo_verificacion = 0.5
+interaccion = "manual"
+esperar_resolucion = true
+detener_si_no_resuelto = true
+
+[tool.sunarp-login.limites]
+ingresos_maximos_diarios = 5
+duracion_bloqueo_horas = 24
+
+[tool.sunarp-login.comportamiento]
+captcha_manual = true
+detener_si_hay_bloqueo = true
+limpiar_campos_si_hay_bloqueo = true
+cerrar_navegador_al_finalizar = false
+
+[tool.sunarp-login.logging]
+nivel = "INFO"
+formato = "%(asctime)s | %(levelname)s | %(message)s"

@@ -1,17 +1,27 @@
-# Este archivo convierte la carpeta 'acciones' en un paquete modular de Python.
-# Expone las funciones principales directamente para limpiar las importaciones del orquestador.
+
+# Archivo:
+# D:\libs\chaskitambo_plugin_sunarp\src\chaskitambo_plugin_sunarp\acciones\__init__.py
+
+# Exportaciones públicas del paquete acciones.
 
 from .oficina import seleccionar_oficina
 from .area import seleccionar_area
 from .criterio import configurar_criterio_partida
-from .buscar import ejecutar_busqueda_y_esperar_spinner
-from .verificador import verificar_estado_y_previsualizar
+from .buscar import (
+    EstadoBusqueda,
+    ResultadoBusqueda,
+    ejecutar_busqueda_y_verificar,
+)
 
-# Definimos los módulos autorizados para exportación masiva
+# Compatibilidad con código anterior que importe el nombre antiguo.
+ejecutar_busqueda_y_esperar_spinner = ejecutar_busqueda_y_verificar
+
 __all__ = [
     "seleccionar_oficina",
     "seleccionar_area",
     "configurar_criterio_partida",
+    "EstadoBusqueda",
+    "ResultadoBusqueda",
+    "ejecutar_busqueda_y_verificar",
     "ejecutar_busqueda_y_esperar_spinner",
-    "verificar_estado_y_previsualizar"
 ]

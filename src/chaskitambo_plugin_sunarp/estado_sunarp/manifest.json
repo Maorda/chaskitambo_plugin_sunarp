@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "actualizado_en": "2026-10-14T00:47:44-05:00",
+  "actualizado_en": "2026-10-15T23:29:55-05:00",
   "partidas": {
     "[\"LIMA\", \"PROPIEDAD INMUEBLE PREDIAL\", \"14443925\", \"00225-2026-0-1828-JR-CO-04\"]": {
       "oficina_registral": "LIMA",
@@ -98,6 +98,17 @@
       "inicio_procesamiento_en": "2026-10-14T00:47:07-05:00",
       "heartbeat_en": "2026-10-14T00:47:44-05:00",
       "finalizacion_en": "2026-10-14T00:47:44-05:00"
+    },
+    "[\"ANCASH\", \"PROPIEDAD INMUEBLE PREDIAL\", \"P37005267\", \"00012-2023-0-0212-JP-CI-01\"]": {
+      "oficina_registral": "ANCASH",
+      "area_registral": "PROPIEDAD INMUEBLE PREDIAL",
+      "partida_registral": "P37005267",
+      "expediente": "00012-2023-0-0212-JP-CI-01",
+      "estado": "pendiente",
+      "asientos": {},
+      "motivo": null,
+      "creado_en": "2026-10-15T23:29:55-05:00",
+      "actualizado_en": "2026-10-15T23:29:55-05:00"
     }
   }
 }

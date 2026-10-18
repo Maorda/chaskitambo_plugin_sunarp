@@ -1,30 +1,45 @@
+# Archivo: acciones/pre_extraer_partida/oficina.py
+
 import random
 import nodriver as uc
 
-async def seleccionar_oficina(page: uc.Tab, oficina: str):
+
+async def seleccionar_oficina(page: uc.Tab, oficina: str) -> bool:
     print(f"[Acción] Seleccionando oficina: {oficina}...")
-    
-    # 1. Hacemos clic en el contenedor del select para desplegarlo
-    selectores = await page.select_all('nz-select-top-control.ant-select-selector')
+
+    # 1. Desplegar el selector de oficina.
+    selectores = await page.select_all(
+        "nz-select-top-control.ant-select-selector"
+    )
+
+    if not selectores:
+        print("[-] No se encontró el selector de oficina.")
+        return False
+
     await selectores[0].click()
     await page.sleep(random.uniform(0.5, 0.8))
-    
-    # 2. Buscamos el input de búsqueda interno
-    inputs = await page.select_all('nz-select-search input.ant-select-selection-search-input')
-    input_search = inputs[0]
-    
-    await input_search.send_keys(oficina)
-    
-    # Aumentamos ligeramente la espera para que Angular filtre y renderice la lista
+
+    # 2. Escribir el nombre de la oficina.
+    inputs = await page.select_all(
+        "nz-select-search input.ant-select-selection-search-input"
+    )
+
+    if not inputs:
+        print("[-] No se encontró el campo de búsqueda de oficina.")
+        return False
+
+    await inputs[0].send_keys(oficina)
     await page.sleep(random.uniform(1.0, 1.5))
-    
-    # 3. CORRECCIÓN: Hacemos clic directo en la opción en lugar de usar "\n"
-    opciones_desplegadas = await page.select_all('.ant-select-item-option')
-    
-    if opciones_desplegadas:
-        await opciones_desplegadas[0].click()
-    else:
-        print(f"[-] Advertencia: No se renderizó la opción para {oficina}")
-        
-    # Pequeña pausa para asegurar que el menú se cerró
+
+    # 3. Seleccionar la opción renderizada.
+    opciones = await page.select_all(".ant-select-item-option")
+
+    if not opciones:
+        print(f"[-] No se encontró una opción para: {oficina}")
+        return False
+
+    await opciones[0].click()
     await page.sleep(random.uniform(0.6, 1.0))
+
+    print(f"[Acción] Se hizo clic en la opción para: {oficina}")
+    return True
