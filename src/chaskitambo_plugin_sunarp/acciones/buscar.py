@@ -1,26 +1,17 @@
-
 import asyncio
 import json
 import logging
 import re
-
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-
 import nodriver as uc
-
-
 logger = logging.getLogger("chaskitambo.plugin.sunarp")
-
-
 class EstadoBusqueda(str, Enum):
     REGISTROS_ENCONTRADOS = "registros_encontrados"
     SIN_REGISTROS = "sin_registros"
     TIEMPO_AGOTADO = "tiempo_agotado"
     ERROR_BUSQUEDA = "error_busqueda"
-
-
 @dataclass
 class ResultadoBusqueda:
     estado: EstadoBusqueda

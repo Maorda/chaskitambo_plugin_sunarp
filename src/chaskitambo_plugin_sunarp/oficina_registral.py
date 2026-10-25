@@ -6,6 +6,7 @@ MAPEO_CORTE_JUDICIAL_SUNARP = {
     "1802": "LIMA",  # Lima Norte
     "1803": "LIMA",  # Lima Sur
     "1804": "LIMA",  # Lima Este
+    "1876": "LIMA",  # Lima
     "0701": "CALLAO",  # Callao
     "1303": "BARRANCA",  # Barranca
     "0801": "CAÑETE",  # Cañete
@@ -50,11 +51,13 @@ MAPEO_CORTE_JUDICIAL_SUNARP = {
     "0403": "ISLAY _ MOLLENDO",  # Islay - Mollendo
     "2102": "JULIACA",  # Juliaca
     "1506": "LA MERCED (SELVA CENTRAL)",  # La Merced
+    
     "1403": "NAZCA",  # Nazca
     "2001": "PASCO",  # Pasco
     "1404": "PISCO",  # Pisco
     "1003": "QUILLABAMBA",  # Quillabamba
     "1507": "SATIPO",  # Satipo
+    "3409": "SATIPO", # Satipo
     "1004": "SICUANI",  # Sicuani
     "1503": "TARMA",  # Tarma
     "1202": "TINGO MARIA",  # Tingo María

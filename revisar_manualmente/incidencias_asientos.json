@@ -38,6 +38,18 @@
       "intentos": 2,
       "requiere_revision_manual": true,
       "ultimo_motivo": "RuntimeError: No se pudo preparar el visor PDF. Tipo de respuesta=nodriver.cdp.runtime.ExceptionDetails; detalle='Error: PDFViewerApplication no está disponible.\\n    at <anonymous>:5:19\\n    at <anonymous>:47:7'"
+    },
+    {
+      "partida_registral": "P20031926",
+      "expediente": "01746-2021-0-2301-JR-CI-02",
+      "asiento": "9",
+      "pagina": "1",
+      "estado": "error",
+      "motivo": "RuntimeError: Nodriver no pudo esperar la carga del PDF: Connection closed",
+      "fecha_registro": "2026-10-24T00:23:06-05:00",
+      "ultima_fecha": "2026-10-24T00:23:06-05:00",
+      "intentos": 1,
+      "requiere_revision_manual": true
     }
   ]
 }

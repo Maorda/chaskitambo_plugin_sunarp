@@ -1,0 +1,20 @@
+{
+  "partidas": [
+    {
+      "partida_registral": "70353135",
+      "estado": "sin_registros_en_busqueda",
+      "motivo_observado": "SUNARP mostró Total de registros encontrados: 0",
+      "expediente": "13302-2017-0-1817-JR-CO-03",
+      "fecha_registro": "2026-10-22T16:04:36-05:00",
+      "requiere_revision_manual": true
+    },
+    {
+      "partida_registral": "P20031926",
+      "estado": "sin_registros_en_busqueda",
+      "motivo_observado": "SUNARP mostró Total de registros encontrados: 0",
+      "expediente": "01746-2021-0-2301-JR-CI-02",
+      "fecha_registro": "2026-10-25T08:54:53-05:00",
+      "requiere_revision_manual": true
+    }
+  ]
+}

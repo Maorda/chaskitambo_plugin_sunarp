@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import random
-import sys
 import tempfile
 import time
 from datetime import date
@@ -13,41 +12,312 @@ from typing import Any
 from urllib.parse import urlparse
 from dataclasses import dataclass
 import nodriver as uc
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
-
+from dotenv import dotenv_values
 
 logger = logging.getLogger("sunarp.login")
 MENSAJE_BLOQUEO = "Lo sentimos, ha alcanzado la cantidad máxima permitida de 5 ingresos al sistema. Mañana podrá volver a utilizar nuestro servicio gratuito Conoce Aquí."
-RAIZ_PROYECTO = Path(__file__).resolve().parents[4]
-RUTA_TOML = RAIZ_PROYECTO / "pyproject.toml"
-
+NOMBRE_DIRECTORIO_CONFIG = Path("Chaskitambo") / "plugins" / "sunarp"
 
 @dataclass(slots=True)
 class SunarpSession:
-    """Sesión autenticada de SUNARP cuyo ciclo de vida controla el scraper."""
-
     browser: Any
     page: uc.Tab
 
+def obtener_directorio_configuracion() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        base = Path(local_app_data)
+    else:
+        base = Path.home() / "AppData" / "Local"
+    return base / "Chaskitambo" / "plugins" / "sunarp"
+
+def obtener_ruta_env() -> Path:
+    """Obtiene el .env ubicado en la raíz del proyecto del plugin."""
+    ruta = Path(__file__).resolve()
+
+    for directorio in ruta.parents:
+        if (
+            directorio.name == "chaskitambo_plugin_sunarp"
+            and (directorio / "pyproject.toml").is_file()
+        ):
+            ruta_env = directorio / ".env"
+
+            if not ruta_env.is_file():
+                raise FileNotFoundError(
+                    f"No existe el archivo de configuración del plugin: {ruta_env}"
+                )
+
+            return ruta_env
+
+    raise FileNotFoundError(
+        "No se encontró la raíz del proyecto chaskitambo_plugin_sunarp "
+        "a partir de la ubicación de iniciar_session.py."
+    )
+
+
+async def _detectar_modal_verificacion_requerida(page) -> bool:
+    """
+    Detecta exclusivamente el SweetAlert2 que solicita resolver el captcha.
+    No interactúa con el captcha de Cloudflare.
+    """
+    expresion = r"""
+    (() => {
+        const modal = document.querySelector(
+            '.swal2-popup.swal2-show'
+        );
+
+        if (!modal) {
+            return false;
+        }
+
+        const titulo = (
+            modal.querySelector('.swal2-title')?.innerText || ''
+        ).trim();
+
+        const contenido = (
+            modal.querySelector('.swal2-html-container')?.innerText ||
+            modal.querySelector('.swal2-content')?.innerText ||
+            ''
+        ).trim();
+
+        return (
+            titulo === 'Verificación requerida' &&
+            contenido.includes(
+                'Por favor resuelve el captcha antes de continuar'
+            )
+        );
+    })()
+    """
+
+    try:
+        resultado = await evaluar(page, expresion)
+        return bool(resultado)
+    except Exception as exc:
+        logger.debug(
+            "No se pudo comprobar el modal de verificación: {}",
+            exc,
+        )
+        return False
+
+
+async def _cerrar_modal_verificacion_requerida(page) -> bool:
+    """
+    Espera brevemente el modal de verificación y pulsa su botón OK.
+    Devuelve True si encontró y cerró el aviso.
+    """
+    tiempo_maximo = 5.0
+    intervalo = 0.25
+    transcurrido = 0.0
+
+    while transcurrido < tiempo_maximo:
+        if await _detectar_modal_verificacion_requerida(page):
+            boton = await page.select("button.swal2-confirm")
+
+            if boton is None:
+                logger.warning(
+                    "El aviso de verificación apareció, "
+                    "pero no se encontró el botón OK."
+                )
+                return False
+
+            await boton.click()
+            await asyncio.sleep(0.3)
+
+            logger.info(
+                "Aviso 'Verificación requerida' cerrado. "
+                "Se requiere resolver el captcha manualmente."
+            )
+            return True
+
+        await asyncio.sleep(intervalo)
+        transcurrido += intervalo
+
+    return False
+
+
+async def _esperar_turnstile_resuelto(page, config) -> bool:
+    """
+    Espera a que el usuario resuelva manualmente Turnstile.
+
+    La comprobación se basa en la respuesta del widget; nunca pulsa
+    ni intenta resolver automáticamente la casilla de Cloudflare.
+    """
+    configuracion = config["turnstile"]
+
+    if not configuracion["habilitado"]:
+        logger.warning(
+            "Turnstile está deshabilitado en la configuración."
+        )
+        return False
+
+    tiempo_maximo = configuracion["tiempo_maximo_espera"]
+    intervalo = configuracion["intervalo_verificacion"]
+    transcurrido = 0.0
+    aviso_mostrado = False
+
+    logger.info(
+        "Resuelve manualmente la casilla de Cloudflare en el navegador."
+    )
+
+    while transcurrido < tiempo_maximo:
+        estado = await _estado_turnstile(page, config)
+
+        if estado.get("respuesta_disponible", False):
+            logger.info(
+                "Se detectó una respuesta de Turnstile. "
+                "Se continuará con el formulario."
+            )
+            return True
+
+        if (
+            estado.get("iframe_visible", False)
+            and not aviso_mostrado
+        ):
+            logger.info(
+                "El desafío de Cloudflare está visible. "
+                "Esperando la intervención manual."
+            )
+            aviso_mostrado = True
+
+        await asyncio.sleep(intervalo)
+        transcurrido += intervalo
+
+    logger.warning(
+        "Turnstile no fue confirmado dentro de los {} segundos.",
+        tiempo_maximo,
+    )
+    return False
+
 
 def cargar_configuracion() -> dict[str, Any]:
-    if not RUTA_TOML.is_file():
-        raise FileNotFoundError(f"No se encontró la configuración del proyecto: {RUTA_TOML}")
-    with RUTA_TOML.open("rb") as archivo:
-        datos = tomllib.load(archivo)
-    try:
-        return datos["tool"]["sunarp-login"]
-    except KeyError as exc:
-        raise ValueError("Falta la sección [tool.sunarp-login] en pyproject.toml.") from exc
+    ruta_env = obtener_ruta_env()
+    if ruta_env.is_file():
+        valores_env = dotenv_values(dotenv_path=ruta_env)
+    else:
+        valores_env = {}
+    def obtener_texto(clave: str, predeterminado: str) -> str:
+        valor = os.environ.get(clave)
+        if valor is None:
+            valor = valores_env.get(clave)
+        if valor is None:
+            return predeterminado
+        return str(valor).strip()
+    def obtener_entero(clave: str, predeterminado: int) -> int:
+        valor = obtener_texto(clave, str(predeterminado))
+        try:
+            return int(valor)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Configuración inválida para {clave}: {valor!r}. Se esperaba un número entero.") from exc
+    def obtener_decimal(clave: str, predeterminado: float) -> float:
+        valor = obtener_texto(clave, str(predeterminado))
+        try:
+            return float(valor)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Configuración inválida para {clave}: {valor!r}. Se esperaba un número.") from exc
+    def obtener_booleano(clave: str, predeterminado: bool) -> bool:
+        valor = obtener_texto(clave, "true" if predeterminado else "false").lower()
+        if valor in {"true", "1", "yes", "si", "sí", "on"}:
+            return True
+        if valor in {"false", "0", "no", "off"}:
+            return False
+        raise ValueError(f"Configuración inválida para {clave}: {valor!r}. Use true o false.")
+    return {
+        "_ruta_env": ruta_env,
+        "url_inicio": obtener_texto("SUNARP_URL_INICIO", "https://conoce-aqui.sunarp.gob.pe/conoce-aqui/inicio"),
+        "url_autenticado": obtener_texto("SUNARP_URL_AUTENTICADO", "https://conoce-aqui.sunarp.gob.pe/conoce-aqui/servicio/busqueda"),
+        "archivos": {"credenciales": obtener_texto("SUNARP_CREDENCIALES_FILE", "credenciales.json")},
+        "espera": {
+            "carga_pagina": obtener_entero("SUNARP_ESPERA_CARGA_PAGINA", 30),
+            "modal_terminos": obtener_entero("SUNARP_ESPERA_MODAL_TERMINOS", 20),
+            "desaparicion_modal": obtener_entero("SUNARP_ESPERA_DESAPARICION_MODAL", 15),
+            "formulario": obtener_entero("SUNARP_ESPERA_FORMULARIO", 20),
+            "resultado_login": obtener_entero("SUNARP_ESPERA_RESULTADO_LOGIN", 60),
+            "sondeo": obtener_decimal("SUNARP_INTERVALO_SONDEO", 0.5),
+        },
+        "escritura": {
+            "pausa_minima": obtener_decimal("SUNARP_PAUSA_MINIMA", 0.08),
+            "pausa_maxima": obtener_decimal("SUNARP_PAUSA_MAXIMA", 0.22),
+            "pausa_entre_campos": obtener_decimal("SUNARP_PAUSA_ENTRE_CAMPOS", 0.5),
+        },
+        "selectores": {
+            "modal_terminos": obtener_texto("SUNARP_SELECTOR_MODAL_TERMINOS", ".ant-modal-content"),
+            "aceptar_terminos": obtener_texto("SUNARP_SELECTOR_ACEPTAR_TERMINOS", "button.accept-button"),
+            "dni": obtener_texto("SUNARP_SELECTOR_DNI", 'input[formcontrolname="numeroDocumento"]'),
+            "digito_verificacion": obtener_texto("SUNARP_SELECTOR_DIGITO", 'input[formcontrolname="digito"]'),
+            "fecha_emision": obtener_texto("SUNARP_SELECTOR_FECHA_EMISION", 'input[formcontrolname="fechaEmision"]'),
+            "validar": obtener_texto("SUNARP_SELECTOR_VALIDAR", "button.login-form-button"),
+        },
+        "turnstile": {
+            "habilitado": obtener_booleano("SUNARP_TURNSTILE_HABILITADO", True),
+            "iframe_host": obtener_texto("SUNARP_TURNSTILE_IFRAME_HOST", "challenges.cloudflare.com"),
+            "selector_componente": obtener_texto("SUNARP_TURNSTILE_SELECTOR_COMPONENTE", "cloudcaptcha ngx-turnstile"),
+            "selector_respuesta": obtener_texto("SUNARP_TURNSTILE_SELECTOR_RESPUESTA", 'input[name="cf-turnstile-response"]'),
+            "tiempo_deteccion_inicial": obtener_decimal("SUNARP_TURNSTILE_TIEMPO_DETECCION_INICIAL", 5.0),
+            "tiempo_maximo_espera": obtener_entero("SUNARP_TURNSTILE_TIEMPO_MAXIMO_ESPERA", 180),
+            "intervalo_verificacion": obtener_decimal("SUNARP_TURNSTILE_INTERVALO_VERIFICACION", 0.5),
+        },
+        "limites": {
+            "ingresos_maximos_diarios": obtener_entero("SUNARP_INGRESOS_MAXIMOS_DIARIOS", 5),
+            "duracion_bloqueo_horas": obtener_entero("SUNARP_DURACION_BLOQUEO_HORAS", 24),
+        },
+        "comportamiento": {},
+        "logging": {
+            "nivel": obtener_texto("SUNARP_LOG_NIVEL", "INFO"),
+            "formato": obtener_texto("SUNARP_LOG_FORMATO", "%(asctime)s | %(levelname)s | %(message)s"),
+        },
+    }
+
+def validar_configuracion(config: dict[str, Any]) -> None:
+    espera = config["espera"]
+    escritura = config["escritura"]
+    turnstile = config["turnstile"]
+    limites = config["limites"]
+    tiempos_positivos = {
+        "SUNARP_ESPERA_CARGA_PAGINA": espera["carga_pagina"],
+        "SUNARP_ESPERA_MODAL_TERMINOS": espera["modal_terminos"],
+        "SUNARP_ESPERA_DESAPARICION_MODAL": espera["desaparicion_modal"],
+        "SUNARP_ESPERA_FORMULARIO": espera["formulario"],
+        "SUNARP_ESPERA_RESULTADO_LOGIN": espera["resultado_login"],
+        "SUNARP_INTERVALO_SONDEO": espera["sondeo"],
+        "SUNARP_PAUSA_MINIMA": escritura["pausa_minima"],
+        "SUNARP_PAUSA_MAXIMA": escritura["pausa_maxima"],
+        "SUNARP_TURNTSTILE_INTERVALO_VERIFICACION": turnstile["intervalo_verificacion"],
+    }
+    for nombre, valor in tiempos_positivos.items():
+        if valor <= 0:
+            raise ValueError(f"{nombre} debe ser mayor que cero.")
+    if escritura["pausa_minima"] > escritura["pausa_maxima"]:
+        raise ValueError("SUNARP_PAUSA_MINIMA no puede superar SUNARP_PAUSA_MAXIMA.")
+    if escritura["pausa_entre_campos"] < 0:
+        raise ValueError("SUNARP_PAUSA_ENTRE_CAMPOS no puede ser negativo.")
+    if turnstile["tiempo_deteccion_inicial"] < 0:
+        raise ValueError("SUNARP_TURNTSTILE_TIEMPO_DETECCION_INICIAL no puede ser negativo.")
+    if turnstile["tiempo_maximo_espera"] <= 0:
+        raise ValueError("SUNARP_TURNTSTILE_TIEMPO_MAXIMO_ESPERA debe ser mayor que cero.")
+    if limites["ingresos_maximos_diarios"] <= 0:
+        raise ValueError("SUNARP_INGRESOS_MAXIMOS_DIARIOS debe ser mayor que cero.")
+    if limites["duracion_bloqueo_horas"] <= 0:
+        raise ValueError("SUNARP_DURACION_BLOQUEO_HORAS debe ser mayor que cero.")
+    for nombre in ("url_inicio", "url_autenticado"):
+        parsed = urlparse(config[nombre])
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError(f"La configuración {nombre} debe ser una URL HTTPS válida.")
+    for nombre in ("modal_terminos", "aceptar_terminos", "dni", "digito_verificacion", "fecha_emision", "validar"):
+        if not config["selectores"][nombre].strip():
+            raise ValueError(f"El selector '{nombre}' no puede estar vacío.")
+    if turnstile["habilitado"]:
+        for nombre in ("iframe_host", "selector_componente", "selector_respuesta"):
+            if not turnstile[nombre].strip():
+                raise ValueError(f"La configuración Turnstile '{nombre}' no puede estar vacía.")
 
 def obtener_ruta_credenciales(config: dict[str, Any]) -> Path:
-    ruta = Path(config["archivos"]["credenciales"])
-    if not ruta.is_absolute():
-        ruta = RAIZ_PROYECTO / ruta
-    return ruta.resolve()
+    ruta = Path(config["archivos"]["credenciales"]).expanduser()
+
+    if ruta.is_absolute():
+        return ruta.resolve()
+
+    ruta_env = Path(config["_ruta_env"])
+    return (ruta_env.parent / ruta).resolve()
 
 def cargar_credenciales(ruta: Path) -> list[dict[str, Any]]:
     if not ruta.is_file():
@@ -127,7 +397,7 @@ def registrar_bloqueo(registro: dict[str, Any], ruta: Path, credenciales: list[d
     horas = float(config["limites"]["duracion_bloqueo_horas"])
     registro["bloqueado_hasta"] = time.time() + horas * 3600
     guardar_credenciales(ruta, credenciales)
-    logger.warning("Bloqueo oficial detectado. Se detendrán los intentos.")
+    logger.warning("Bloqueo oficial detectado. Se procederá a la rotación.")
 
 async def evaluar(page: Any, expresion: str) -> Any:
     resultado = await page.evaluate(expresion, return_by_value=True)
@@ -151,37 +421,20 @@ def normalizar_resultado_nodriver(resultado: Any) -> Any:
         return [normalizar_resultado_nodriver(item) for item in resultado]
     return resultado
 
-
-async def _estado_turnstile(
-    page: uc.Tab,
-    config: dict[str, Any],
-) -> dict[str, bool]:
-    """
-    Inspecciona el estado observable de Turnstile desde el documento principal.
-
-    No accede al contenido interno del iframe de Cloudflare ni registra
-    el valor de la respuesta de verificación.
-    """
+async def _estado_turnstile(page: uc.Tab, config: dict[str, Any]) -> dict[str, bool]:
     turnstile = config["turnstile"]
-
     componente_json = json.dumps(turnstile["selector_componente"])
     respuesta_json = json.dumps(turnstile["selector_respuesta"])
-    host_json = json.dumps(
-        turnstile.get("iframe_host", "challenges.cloudflare.com")
-    )
-
+    host_json = json.dumps(turnstile.get("iframe_host", "challenges.cloudflare.com"))
     script = f"""
     (() => {{
         const componente = document.querySelector({componente_json});
         const respuesta = document.querySelector({respuesta_json});
         const host = {host_json};
-
         const visible = (elemento) => {{
             if (!elemento) return false;
-
             const estilo = window.getComputedStyle(elemento);
             const rect = elemento.getBoundingClientRect();
-
             return (
                 estilo.display !== "none" &&
                 estilo.visibility !== "hidden" &&
@@ -190,19 +443,11 @@ async def _estado_turnstile(
                 rect.height > 0
             );
         }};
-
-        const iframes = Array.from(
-            document.querySelectorAll("iframe")
-        ).filter((iframe) => {{
+        const iframes = Array.from(document.querySelectorAll("iframe")).filter((iframe) => {{
             const src = iframe.getAttribute("src") || "";
             return src.includes(host);
         }});
-
-        const valor = (
-            respuesta &&
-            typeof respuesta.value === "string"
-        ) ? respuesta.value.trim() : "";
-
+        const valor = (respuesta && typeof respuesta.value === "string") ? respuesta.value.trim() : "";
         return JSON.stringify({{
             componente_presente: Boolean(componente),
             respuesta_presente: Boolean(respuesta),
@@ -212,175 +457,78 @@ async def _estado_turnstile(
         }});
     }})()
     """
-
     resultado = await evaluar(page, script)
-
     if isinstance(resultado, str):
         try:
             estado = json.loads(resultado)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                "Turnstile devolvió un estado JSON inválido."
-            ) from exc
+            raise RuntimeError("Turnstile devolvió un estado JSON inválido.") from exc
     elif isinstance(resultado, dict):
         estado = resultado
     else:
         estado = normalizar_resultado_nodriver(resultado)
-
         if isinstance(estado, str):
             try:
                 estado = json.loads(estado)
             except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    "No se pudo interpretar el estado de Turnstile."
-                ) from exc
-
+                raise RuntimeError("No se pudo interpretar el estado de Turnstile.") from exc
     if not isinstance(estado, dict):
-        raise RuntimeError(
-            "El estado de Turnstile no es un objeto válido."
-        )
-
+        raise RuntimeError("El estado de Turnstile no es un objeto válido.")
     return {
-        "componente_presente": bool(
-            estado.get("componente_presente")
-        ),
-        "respuesta_presente": bool(
-            estado.get("respuesta_presente")
-        ),
-        "respuesta_disponible": bool(
-            estado.get("respuesta_disponible")
-        ),
-        "iframe_presente": bool(
-            estado.get("iframe_presente")
-        ),
-        "iframe_visible": bool(
-            estado.get("iframe_visible")
-        ),
+        "componente_presente": bool(estado.get("componente_presente")),
+        "respuesta_presente": bool(estado.get("respuesta_presente")),
+        "respuesta_disponible": bool(estado.get("respuesta_disponible")),
+        "iframe_presente": bool(estado.get("iframe_presente")),
+        "iframe_visible": bool(estado.get("iframe_visible")),
     }
 
-
-async def _esperar_verificacion_manual(
-    page: uc.Tab,
-    config: dict[str, Any],
-) -> bool:
-    """
-    Detecta si Turnstile requiere intervención manual.
-
-    Si no aparece un desafío interactivo durante la ventana inicial,
-    permite continuar con el flujo normal.
-
-    Si aparece un iframe visible de Cloudflare, espera a que el campo
-    de respuesta contenga un valor antes de continuar con el formulario.
-    """
+async def _esperar_verificacion_manual(page: uc.Tab, config: dict[str, Any]) -> bool:
     configuracion = config["turnstile"]
-
     if not configuracion.get("habilitado", True):
-        logger.error(
-            "La gestión de Turnstile está deshabilitada en la configuración."
-        )
+        logger.error("La gestión de Turnstile está deshabilitada en la configuración.")
         return False
-
-    tiempo_maximo = float(
-        configuracion["tiempo_maximo_espera"]
-    )
-    intervalo = float(
-        configuracion["intervalo_verificacion"]
-    )
-    tiempo_deteccion = float(
-        configuracion.get("tiempo_deteccion_inicial", 5.0)
-    )
-
+    tiempo_maximo = float(configuracion["tiempo_maximo_espera"])
+    intervalo = float(configuracion["intervalo_verificacion"])
+    tiempo_deteccion = float(configuracion["tiempo_deteccion_inicial"])
     if tiempo_maximo <= 0:
-        raise ValueError(
-            "'tiempo_maximo_espera' debe ser mayor que cero."
-        )
-
+        raise ValueError("'tiempo_maximo_espera' debe ser mayor que cero.")
     if intervalo <= 0:
-        raise ValueError(
-            "'intervalo_verificacion' debe ser mayor que cero."
-        )
-
+        raise ValueError("'intervalo_verificacion' debe ser mayor que cero.")
     if tiempo_deteccion < 0:
-        raise ValueError(
-            "'tiempo_deteccion_inicial' no puede ser negativo."
-        )
-
+        raise ValueError("'tiempo_deteccion_inicial' no puede ser negativo.")
     loop = asyncio.get_running_loop()
     limite_deteccion = loop.time() + tiempo_deteccion
-
-    logger.info(
-        "Comprobando si SUNARP requiere una verificación manual de Turnstile."
-    )
-
+    logger.info("Comprobando si SUNARP requiere una verificación manual de Turnstile.")
     while True:
         try:
             estado = await _estado_turnstile(page, config)
-
             if estado["respuesta_disponible"]:
-                logger.info(
-                    "Turnstile dispone de una respuesta. "
-                    "Se continuará con la comprobación del formulario."
-                )
+                logger.info("Turnstile dispone de una respuesta. Se continuará con la comprobación del formulario.")
                 return True
-
             if estado["iframe_visible"]:
-                logger.info(
-                    "Se detectó un desafío visible de Cloudflare. "
-                    "Esperando la intervención manual."
-                )
+                logger.info("Se detectó un desafío visible de Cloudflare. Esperando la intervención manual.")
                 break
-
         except Exception as exc:
-            logger.debug(
-                "No se pudo consultar temporalmente el estado de Turnstile: %s",
-                exc,
-            )
-
+            logger.debug("No se pudo consultar temporalmente el estado de Turnstile: %s", exc)
         restante = limite_deteccion - loop.time()
-
         if restante <= 0:
-            logger.info(
-                "No se detectó un desafío interactivo de Turnstile "
-                "durante la ventana inicial. Se continuará con el "
-                "flujo normal de autenticación."
-            )
+            logger.info("No se detectó un desafío interactivo de Turnstile durante la ventana inicial. Se continuará con el flujo normal de autenticación.")
             return True
-
         await asyncio.sleep(min(intervalo, restante))
-
     limite_resolucion = loop.time() + tiempo_maximo
-
     while loop.time() < limite_resolucion:
         try:
             estado = await _estado_turnstile(page, config)
-
             if estado["respuesta_disponible"]:
-                logger.info(
-                    "Se detectó una respuesta de Turnstile después "
-                    "de la intervención manual. Se continuará con "
-                    "el flujo de autenticación."
-                )
+                logger.info("Se detectó una respuesta de Turnstile después de la intervención manual. Se continuará con el flujo de autenticación.")
                 return True
-
         except Exception as exc:
-            logger.debug(
-                "No se pudo comprobar temporalmente la resolución "
-                "de Turnstile: %s",
-                exc,
-            )
-
+            logger.debug("No se pudo comprobar temporalmente la resolución de Turnstile: %s", exc)
         restante = limite_resolucion - loop.time()
-
         if restante > 0:
             await asyncio.sleep(min(intervalo, restante))
-
-    logger.warning(
-        "Se agotó el tiempo de espera de Turnstile "
-        "(%.1f segundos). No se continuará con el envío del formulario.",
-        tiempo_maximo,
-    )
+    logger.warning("Se agotó el tiempo de espera de Turnstile (%.1f segundos). No se continuará con el envío del formulario.", tiempo_maximo)
     return False
-
 
 def expresion_elemento_visible(selector: str) -> str:
     selector_js = json.dumps(selector)
@@ -537,7 +685,10 @@ async def escribir_gradualmente(page: Any, selector: str, valor: str, pausa_mini
             }})()
         """
         resultado = await evaluar(page, expresion)
-        logger.info("Resultado de verificación de %s: tipo=%s, resultado=%r", selector, type(resultado).__name__, resultado)
+        if isinstance(resultado, dict):
+            logger.info("Verificación del control %s: encontrado=%s, longitud=%s, enfocado=%s.", selector, resultado.get("encontrado"), resultado.get("longitud"), resultado.get("enfocado"))
+        else:
+            logger.warning("Respuesta de verificación inesperada para el control %s: tipo=%s.", selector, type(resultado).__name__)
         if not isinstance(resultado, dict):
             logger.error("Respuesta inesperada de Nodriver al verificar %s.", selector)
             return False
@@ -724,6 +875,7 @@ async def resolver_dialogo_sesion_activa(page: Any) -> str:
         logger.exception("Error al detectar o resolver el diálogo de sesión activa.")
         return "error"
 
+
 async def resolver_dialogo_conocido(page: Any) -> str:
     expresion = r"""
     (() => {
@@ -734,35 +886,45 @@ async def resolver_dialogo_conocido(page: Any) -> str:
                 .replace(/\s+/g, " ")
                 .trim()
                 .toLowerCase();
+
         const visible = (elemento) => {
             if (!elemento) return false;
+
             const estilo = getComputedStyle(elemento);
             const rect = elemento.getBoundingClientRect();
+
             return estilo.display !== "none"
                 && estilo.visibility !== "hidden"
                 && Number(estilo.opacity) !== 0
                 && rect.width > 0
                 && rect.height > 0;
         };
+
         const dialogos = [
             ...document.querySelectorAll(".swal2-popup.swal2-show")
         ].filter(visible);
+
         return JSON.stringify(dialogos.map((dialogo) => {
             const titulo = normalizar(
                 dialogo.querySelector("#swal2-title")?.innerText
             );
+
             const descripcion = normalizar(
                 dialogo.querySelector("#swal2-html-container")?.innerText
             );
+
             const botones = [
                 ...dialogo.querySelectorAll("button")
             ]
             .filter(visible)
             .map((boton) => ({
-                texto: normalizar(boton.innerText || boton.textContent),
+                texto: normalizar(
+                    boton.innerText || boton.textContent
+                ),
                 habilitado: !boton.disabled
                     && boton.getAttribute("aria-disabled") !== "true"
             }));
+
             return {
                 titulo,
                 descripcion,
@@ -772,40 +934,87 @@ async def resolver_dialogo_conocido(page: Any) -> str:
         }));
     })()
     """
+
     try:
         respuesta = await evaluar(page, expresion)
+
         if not isinstance(respuesta, str):
-            logger.error("El detector de modales recibió un tipo inesperado: %s.", type(respuesta).__name__)
+            logger.error(
+                "El detector de modales recibió un tipo inesperado: %s.",
+                type(respuesta).__name__,
+            )
             return "error"
+
         try:
             dialogos = json.loads(respuesta)
         except json.JSONDecodeError:
-            logger.error("Nodriver devolvió una respuesta que no es JSON válido al inspeccionar los modales.")
+            logger.error(
+                "Nodriver devolvió una respuesta que no es JSON válido "
+                "al inspeccionar los modales."
+            )
             return "error"
+
         if not isinstance(dialogos, list):
-            logger.error("La respuesta JSON del detector no contiene una lista.")
+            logger.error(
+                "La respuesta JSON del detector no contiene una lista."
+            )
             return "error"
+
         for dialogo in dialogos:
             if not isinstance(dialogo, dict):
                 continue
+
             titulo = str(dialogo.get("titulo", ""))
             descripcion = str(dialogo.get("descripcion", ""))
+
+            # Mantener el reconocimiento de la sesión activa.
             es_sesion_activa = (
-                "en este momento hay una sesion activa asociada al documento ingresado" in titulo
-                and "se cerrara automaticamente la sesion que actualmente esta activa" in descripcion
+                "en este momento hay una sesion activa asociada "
+                "al documento ingresado" in titulo
+                and
+                "se cerrara automaticamente la sesion que actualmente "
+                "esta activa" in descripcion
             )
+
             if es_sesion_activa:
                 resultado = await resolver_dialogo_sesion_activa(page)
+
                 if resultado == "resuelto":
                     return "resuelto"
-                logger.error("Se identificó la sesión activa, pero su resolución devolvió %r.", resultado)
+
+                logger.error(
+                    "Se identificó la sesión activa, pero su "
+                    "resolución devolvió %r.",
+                    resultado,
+                )
                 return "error"
-            es_limite = (
-                "ha alcanzado la cantidad maxima permitida de 5 ingresos al sistema" in titulo
-                and "manana podra volver a utilizar nuestro servicio gratuito conoce aqui" in descripcion
+
+            # Compatibilidad con el mensaje anterior y el mensaje actual.
+            limite_anterior = (
+                "ha alcanzado la cantidad maxima permitida de "
+                "5 ingresos al sistema" in titulo
+                and
+                "manana podra volver a utilizar nuestro servicio "
+                "gratuito conoce aqui" in descripcion
             )
-            if es_limite:
-                logger.warning("Se identificó el modal oficial de límite de ingresos.")
+
+            limite_actual = (
+                "ha excedido el limite de 5 consultas gratuitas "
+                "permitidas" in titulo
+                and
+                "el dia de manana podra realizar 5 nuevas consultas"
+                in descripcion
+            )
+
+            if limite_anterior or limite_actual:
+                logger.warning(
+                    "SUNARP confirmó el límite diario de la credencial."
+                )
+
+                # La detección positiva del límite es suficiente para
+                # clasificar la credencial como bloqueada por hoy.
+                # El clic es una acción de limpieza, no una condición
+                # para reconocer el límite.
                 expresion_aceptar = r"""
                 (() => {
                     const normalizar = (texto) =>
@@ -815,64 +1024,130 @@ async def resolver_dialogo_conocido(page: Any) -> str:
                             .replace(/\s+/g, " ")
                             .trim()
                             .toLowerCase();
-                    const dialogo = document.querySelector(
-                        ".swal2-popup.swal2-show"
-                    );
-                    if (!dialogo) return false;
-                    const titulo = normalizar(
-                        dialogo.querySelector("#swal2-title")?.innerText
-                    );
-                    const descripcion = normalizar(
-                        dialogo.querySelector("#swal2-html-container")?.innerText
-                    );
-                    if (
-                        !titulo.includes(
-                            "ha alcanzado la cantidad maxima permitida de 5 ingresos al sistema"
+
+                    const visible = (elemento) => {
+                        if (!elemento) return false;
+
+                        const estilo = getComputedStyle(elemento);
+                        const rect = elemento.getBoundingClientRect();
+
+                        return estilo.display !== "none"
+                            && estilo.visibility !== "hidden"
+                            && Number(estilo.opacity) !== 0
+                            && rect.width > 0
+                            && rect.height > 0;
+                    };
+
+                    const dialogos = [
+                        ...document.querySelectorAll(
+                            ".swal2-popup.swal2-show"
                         )
-                        || !descripcion.includes(
-                            "manana podra volver a utilizar nuestro servicio gratuito conoce aqui"
-                        )
-                    ) {
-                        return false;
+                    ].filter(visible);
+
+                    for (const dialogo of dialogos) {
+                        const titulo = normalizar(
+                            dialogo.querySelector("#swal2-title")?.innerText
+                        );
+
+                        const descripcion = normalizar(
+                            dialogo.querySelector(
+                                "#swal2-html-container"
+                            )?.innerText
+                        );
+
+                        const anterior = (
+                            titulo.includes(
+                                "ha alcanzado la cantidad maxima "
+                                + "permitida de 5 ingresos al sistema"
+                            )
+                            && descripcion.includes(
+                                "manana podra volver a utilizar "
+                                + "nuestro servicio gratuito conoce aqui"
+                            )
+                        );
+
+                        const actual = (
+                            titulo.includes(
+                                "ha excedido el limite de 5 consultas "
+                                + "gratuitas permitidas"
+                            )
+                            && descripcion.includes(
+                                "el dia de manana podra realizar "
+                                + "5 nuevas consultas"
+                            )
+                        );
+
+                        if (!anterior && !actual) {
+                            continue;
+                        }
+
+                        const boton = [
+                            ...dialogo.querySelectorAll(
+                                "button.swal2-confirm"
+                            )
+                        ].find((elemento) =>
+                            visible(elemento)
+                            && !elemento.disabled
+                            && elemento.getAttribute(
+                                "aria-disabled"
+                            ) !== "true"
+                            && normalizar(
+                                elemento.innerText || elemento.textContent
+                            ) === "aceptar"
+                        );
+
+                        if (!boton) {
+                            return false;
+                        }
+
+                        boton.click();
+                        return true;
                     }
-                    const boton = [
-                        ...dialogo.querySelectorAll("button")
-                    ].find((elemento) =>
-                        normalizar(elemento.innerText || elemento.textContent)
-                            === "aceptar"
-                    );
-                    if (!boton || boton.disabled) return false;
-                    const estilo = getComputedStyle(boton);
-                    const rect = boton.getBoundingClientRect();
-                    if (
-                        estilo.display === "none"
-                        || estilo.visibility === "hidden"
-                        || Number(estilo.opacity) === 0
-                        || rect.width === 0
-                        || rect.height === 0
-                    ) {
-                        return false;
-                    }
-                    boton.click();
-                    return true;
+
+                    return false;
                 })()
                 """
+
                 try:
                     pulsado = await evaluar(page, expresion_aceptar)
+
+                    if pulsado is True:
+                        logger.info(
+                            "Se pulsó Aceptar en el modal de límite diario."
+                        )
+                    else:
+                        logger.warning(
+                            "El límite diario está confirmado, pero no "
+                            "se pudo confirmar el clic en Aceptar."
+                        )
+
                 except Exception:
-                    logger.exception("Error al pulsar Aceptar en el modal de límite.")
-                    return "error"
-                if pulsado is not True:
-                    logger.error("Se identificó el límite oficial, pero no se pudo confirmar el clic en Aceptar.")
-                    return "bloqueado"
-                logger.info("Se pulsó Aceptar en el modal oficial de límite.")
+                    logger.warning(
+                        "El límite diario ya estaba confirmado, pero "
+                        "falló la interacción con el botón Aceptar. "
+                        "Se conservará la clasificación de límite."
+                    )
+                    logger.debug(
+                        "Detalle del error al cerrar el modal:",
+                        exc_info=True,
+                    )
+
                 return "bloqueado"
+
         if dialogos:
-            logger.debug("Hay diálogos visibles, pero ninguno coincide con los patrones registrados.")
+            logger.debug(
+                "Hay diálogos visibles, pero ninguno coincide "
+                "con los patrones registrados."
+            )
+
         return "no_detectado"
+
     except Exception:
-        logger.exception("Error al inspeccionar o resolver los diálogos SUNARP.")
+        logger.exception(
+            "Error al inspeccionar o resolver los diálogos SUNARP."
+        )
         return "error"
+
 
 async def esperar_resultado(page: Any, url_anterior: str, config: dict[str, Any]) -> str:
     espera = config["espera"]
@@ -945,106 +1220,322 @@ async def cerrar_navegador(browser: Any) -> None:
         registrado = None
     logger.warning("DIAGNÓSTICO CIERRE | pid=%s | returncode=%s | browser_stopped=%s | registrado_en_nodriver=%s", getattr(proceso_final, "pid", None), getattr(proceso_final, "returncode", None), getattr(browser, "stopped", None), registrado)
 
+
 async def iniciar_sesion_sunarp() -> SunarpSession | bool:
     logger.warning("MÓDULO DE SESIÓN EJECUTADO: %s", __file__)
+
     config = cargar_configuracion()
+    validar_configuracion(config)
+
     ruta_json = obtener_ruta_credenciales(config)
     credenciales = cargar_credenciales(ruta_json)
+
     espera = config["espera"]
     escritura = config["escritura"]
     selectores = config["selectores"]
+
     intervalo = float(espera["sondeo"])
     pausa_min = float(escritura["pausa_minima"])
     pausa_max = float(escritura["pausa_maxima"])
-    conservar_navegador = not bool(config["comportamiento"].get("cerrar_navegador_al_finalizar", True))
+
     total = len(credenciales)
     disponibles = 0
-    logger.info("Inicio de rotación de credenciales SUNARP. Credenciales registradas: %s.", total)
+
+    logger.info(
+        "Inicio de rotación de credenciales SUNARP. Credenciales registradas: %s.",
+        total,
+    )
+
     for indice, registro in enumerate(credenciales):
         numero = indice + 1
         browser = None
         sesion_entregada = False
-        resultado = "incierto"
+
         try:
-            estado = preparar_ciclo(registro, ruta_json, credenciales, config)
+            # 1. Comprobar si la credencial puede utilizarse.
+            estado = preparar_ciclo(
+                registro,
+                ruta_json,
+                credenciales,
+                config,
+            )
+
             if estado == "limite":
-                logger.info("Credencial %s/%s omitida: alcanzó el límite diario de ingresos.", numero, total)
+                logger.info(
+                    "Credencial %s/%s omitida: alcanzó el límite diario de ingresos.",
+                    numero,
+                    total,
+                )
                 continue
+
             if estado == "bloqueado":
-                logger.info("Credencial %s/%s omitida: tiene un bloqueo vigente de SUNARP.", numero, total)
+                logger.info(
+                    "Credencial %s/%s omitida: tiene un bloqueo vigente de SUNARP.",
+                    numero,
+                    total,
+                )
                 continue
+
             if estado != "disponible":
-                logger.error("Estado inesperado para la credencial %s/%s: %r.", numero, total, estado)
+                logger.error(
+                    "Estado inesperado para la credencial %s/%s: %r.",
+                    numero,
+                    total,
+                    estado,
+                )
                 return False
+
             disponibles += 1
-            logger.info("Intentando acceso con la credencial %s/%s.", numero, total)
+
+            logger.info(
+                "Intentando acceso con la credencial %s/%s.",
+                numero,
+                total,
+            )
+
+            # 2. Abrir SUNARP y esperar la carga.
             browser = await uc.start()
-            logger.info("Diagnóstico proceso Nodriver: tipo=%s, pid=%s, poll=%s", type(browser._process).__name__, getattr(browser._process, "pid", None), callable(getattr(browser._process, "poll", None)))
+
+            logger.info(
+                "Diagnóstico proceso Nodriver: tipo=%s, pid=%s, poll=%s",
+                type(browser._process).__name__,
+                getattr(browser._process, "pid", None),
+                callable(getattr(browser._process, "poll", None)),
+            )
+
             page = await browser.get(config["url_inicio"])
-            if not await esperar_condicion(page, "document.readyState === 'complete' || document.readyState === 'interactive'", float(espera["carga_pagina"]), intervalo):
-                logger.error("La página de SUNARP no terminó de cargar. Se detiene la rotación.")
+
+            pagina_lista = await esperar_condicion(
+                page,
+                "document.readyState === 'complete' || "
+                "document.readyState === 'interactive'",
+                float(espera["carga_pagina"]),
+                intervalo,
+            )
+
+            if not pagina_lista:
+                logger.error(
+                    "La página de SUNARP no terminó de cargar. "
+                    "Se detiene la rotación."
+                )
                 return False
+
+            # 3. Aceptar los términos y esperar el formulario.
             if not await aceptar_terminos(page, config):
-                logger.error("No se pudieron aceptar los términos de SUNARP. Se detiene la rotación.")
+                logger.error(
+                    "No se pudieron aceptar los términos de SUNARP. "
+                    "Se detiene la rotación."
+                )
                 return False
+
             if not await esperar_formulario(page, config):
-                logger.error("El formulario de SUNARP no estuvo disponible. Se detiene la rotación.")
+                logger.error(
+                    "El formulario de SUNARP no estuvo disponible. "
+                    "Se detiene la rotación."
+                )
                 return False
+
+            # 4. Preparar y validar los datos de la credencial.
             dni = str(registro["dni"]).strip()
             digito = str(registro["digito"]).strip()
-            fecha = normalizar_fecha_emision(registro["fecha_emision"])
-            if len(dni) != 8 or not dni.isdigit() or len(digito) != 1 or not digito.isdigit():
-                raise ValueError(f"Datos inválidos en la credencial {numero}.")
-            campos = ((selectores["dni"], dni), (selectores["digito_verificacion"], digito), (selectores["fecha_emision"], fecha))
-            for posicion, (selector, valor) in enumerate(campos):
-                correcto = await escribir_gradualmente(page, selector, valor, pausa_min, pausa_max)
-                if not correcto:
-                    logger.error("No se pudo completar y verificar un campo del formulario para la credencial %s. Se detiene la rotación.", numero)
-                    return False
-                if posicion < len(campos) - 1:
-                    await asyncio.sleep(float(escritura["pausa_entre_campos"]))
-            if config["comportamiento"].get("captcha_manual", True):
-                verificado = await _esperar_verificacion_manual(page, config)
-                if not verificado:
-                    logger.warning("No se confirmó una respuesta de Turnstile dentro del tiempo permitido. Se detiene el proceso sin probar otras credenciales.")
-                    return False
-            else:
-                logger.error("La verificación automática de Turnstile está deshabilitada. Para continuar, habilita captcha_manual y completa el desafío en el navegador.")
-                return False
-            estado = preparar_ciclo(registro, ruta_json, credenciales, config)
-            if estado == "limite":
-                logger.info("La credencial %s alcanzó el límite durante la preparación. Se pasa a la siguiente.", numero)
-                continue
-            if estado == "bloqueado":
-                logger.info("La credencial %s tiene un bloqueo vigente. Se pasa a la siguiente.", numero)
-                continue
-            if estado != "disponible":
-                logger.error("No se pudo confirmar la disponibilidad de la credencial %s. Se detiene la rotación.", numero)
-                return False
-            url_anterior = await obtener_url_actual(page)
-            if not url_anterior:
-                logger.error("No se pudo obtener la URL anterior al acceso. Se detiene la rotación por resultado incierto.")
-                return False
-            logger.info("Diagnóstico SUNARP: URL antes del clic=%r.", url_anterior)
-            boton_validar = await page.select(selectores["validar"])
-            if boton_validar is None:
-                logger.error("No se encontró el botón Validar. Se detiene la rotación.")
-                return False
-            await boton_validar.click()
-            logger.info("Diagnóstico: page.url=%r", page.url)
-            for nombre, expresion in (
-                ("URL JavaScript", "window.location.href"),
-                ("Modal visible", '(() => { const d = document.querySelector(".swal2-popup.swal2-show"); return d ? d.innerText : null; })()'),
-                ("Cantidad de modales", 'document.querySelectorAll(".swal2-popup.swal2-show").length'),
+            fecha = normalizar_fecha_emision(
+                registro["fecha_emision"]
+            )
+
+            if (
+                len(dni) != 8
+                or not dni.isdigit()
+                or len(digito) != 1
+                or not digito.isdigit()
             ):
-                try:
-                    resultado = await page.evaluate(expresion)
-                    logger.info("Diagnóstico evaluate [%s]: tipo=%s, valor=%r", nombre, type(resultado).__name__, resultado)
-                except Exception:
-                    logger.exception("Falló la evaluación de diagnóstico: %s", nombre)
-            resultado = await esperar_resultado(page, url_anterior, config)
+                raise ValueError(
+                    f"Datos inválidos en la credencial {numero}."
+                )
+
+            campos = (
+                (selectores["dni"], dni),
+                (selectores["digito_verificacion"], digito),
+                (selectores["fecha_emision"], fecha),
+            )
+
+            for posicion, (selector, valor) in enumerate(campos):
+                correcto = await escribir_gradualmente(
+                    page,
+                    selector,
+                    valor,
+                    pausa_min,
+                    pausa_max,
+                )
+
+                if not correcto:
+                    logger.error(
+                        "No se pudo completar y verificar un campo "
+                        "del formulario para la credencial %s. "
+                        "Se detiene la rotación.",
+                        numero,
+                    )
+                    return False
+
+                if posicion < len(campos) - 1:
+                    await asyncio.sleep(
+                        float(escritura["pausa_entre_campos"])
+                    )
+
+            # 5. Comprobar si Turnstile ya fue resuelto.
+            #
+            # Si existe un desafío visible, se espera la intervención
+            # manual antes de enviar el formulario.
+            estado_turnstile = await _estado_turnstile(page, config)
+
+            if estado_turnstile["respuesta_disponible"]:
+                logger.info(
+                    "Turnstile ya dispone de una respuesta."
+                )
+
+            elif estado_turnstile["iframe_visible"]:
+                verificado = await _esperar_verificacion_manual(
+                    page,
+                    config,
+                )
+
+                if not verificado:
+                    logger.warning(
+                        "No se confirmó la resolución de Turnstile. "
+                        "Se detiene el intento sin probar otras credenciales."
+                    )
+                    return False
+
+            # 6. Revalidar la disponibilidad antes de enviar.
+            estado = preparar_ciclo(
+                registro,
+                ruta_json,
+                credenciales,
+                config,
+            )
+
+            if estado == "limite":
+                logger.info(
+                    "La credencial %s alcanzó el límite durante "
+                    "la preparación. Se pasa a la siguiente.",
+                    numero,
+                )
+                continue
+
+            if estado == "bloqueado":
+                logger.info(
+                    "La credencial %s tiene un bloqueo vigente. "
+                    "Se pasa a la siguiente.",
+                    numero,
+                )
+                continue
+
+            if estado != "disponible":
+                logger.error(
+                    "No se pudo confirmar la disponibilidad "
+                    "de la credencial %s. Se detiene la rotación.",
+                    numero,
+                )
+                return False
+
+            url_anterior = await obtener_url_actual(page)
+
+            if not url_anterior:
+                logger.error(
+                    "No se pudo obtener la URL anterior al acceso. "
+                    "Se detiene la rotación por resultado incierto."
+                )
+                return False
+
+            logger.info(
+                "Diagnóstico SUNARP: URL antes del clic=%r.",
+                url_anterior,
+            )
+
+            # 7. Enviar el formulario.
+            boton_validar = await page.select(
+                selectores["validar"]
+            )
+
+            if boton_validar is None:
+                logger.error(
+                    "No se encontró el botón Validar. "
+                    "Se detiene la rotación."
+                )
+                return False
+
+            await boton_validar.click()
+
+            logger.info(
+                "Formulario enviado. Comprobando si SUNARP requiere "
+                "una verificación adicional."
+            )
+
+            # 8. Esperar el SweetAlert2 que solicita resolver el captcha.
+            requiere_captcha = (
+                await _cerrar_modal_verificacion_requerida(page)
+            )
+
+            if requiere_captcha:
+                # El modal es un aviso del portal. Se cierra y se
+                # permite al usuario resolver el captcha manualmente.
+                verificado = await _esperar_turnstile_resuelto(
+                    page,
+                    config,
+                )
+
+                if not verificado:
+                    logger.warning(
+                        "No se confirmó la resolución manual de "
+                        "Turnstile después del aviso de SUNARP. "
+                        "Se detiene el intento sin rotar credenciales."
+                    )
+                    return False
+
+                # 9. Tras resolver el captcha, volver a enviar
+                # el formulario para que SUNARP procese la solicitud.
+                url_anterior = await obtener_url_actual(page)
+
+                if not url_anterior:
+                    logger.error(
+                        "No se pudo obtener la URL antes de reenviar "
+                        "el formulario tras resolver el captcha."
+                    )
+                    return False
+
+                boton_validar = await page.select(
+                    selectores["validar"]
+                )
+
+                if boton_validar is None:
+                    logger.error(
+                        "No se encontró el botón Validar después "
+                        "de resolver Turnstile."
+                    )
+                    return False
+
+                await boton_validar.click()
+
+                logger.info(
+                    "Formulario reenviado después de resolver "
+                    "manualmente Turnstile."
+                )
+
+            # 10. Esperar el resultado real de autenticación.
+            # La respuesta del captcha por sí sola no acredita
+            # que el inicio de sesión haya sido exitoso.
+            resultado = await esperar_resultado(
+                page,
+                url_anterior,
+                config,
+            )
+
             if resultado == "autenticado":
-                registrar_ingreso_confirmado(registro, ruta_json, credenciales)
+                # El contador solo aumenta tras confirmar el acceso.
+                registrar_ingreso_confirmado(
+                    registro,
+                    ruta_json,
+                    credenciales,
+                )
 
                 logger.info(
                     "Acceso confirmado con la credencial %s/%s.",
@@ -1065,19 +1556,68 @@ async def iniciar_sesion_sunarp() -> SunarpSession | bool:
                 )
 
                 return sesion
+
             if resultado == "bloqueado":
-                registrar_bloqueo(registro, ruta_json, credenciales, config)
+                registrar_bloqueo(
+                    registro,
+                    ruta_json,
+                    credenciales,
+                    config,
+                )
+
                 try:
-                    await limpiar_y_verificar_campos(page, config)
+                    campos_limpiados = (
+                        await limpiar_y_verificar_campos(
+                            page,
+                            config,
+                        )
+                    )
+
+                    if campos_limpiados:
+                        logger.info(
+                            "Campos del formulario limpiados y "
+                            "verificados después del bloqueo."
+                        )
+                    else:
+                        logger.warning(
+                            "No se pudo confirmar la limpieza de "
+                            "todos los campos después del bloqueo."
+                        )
+
                 except Exception:
-                    logger.debug("No fue posible limpiar el formulario después del bloqueo.", exc_info=True)
-                logger.warning("SUNARP confirmó el bloqueo de la credencial %s/%s. Se continuará con la siguiente.", numero, total)
+                    logger.exception(
+                        "Error al limpiar el formulario después "
+                        "del bloqueo oficial."
+                    )
+
+                logger.warning(
+                    "SUNARP confirmó el bloqueo de la credencial "
+                    "%s/%s. Se continuará con la siguiente.",
+                    numero,
+                    total,
+                )
                 continue
-            logger.error("Resultado incierto para la credencial %s/%s: %r. No se incrementará el contador ni se probarán más credenciales.", numero, total, resultado)
+
+            logger.error(
+                "Resultado incierto para la credencial %s/%s: %r. "
+                "No se incrementará el contador ni se probarán "
+                "más credenciales.",
+                numero,
+                total,
+                resultado,
+            )
             return False
+
         except Exception:
-            logger.exception("Error durante el intento con la credencial %s/%s. Se detiene la rotación para evitar interpretar un fallo técnico como un bloqueo de SUNARP.", numero, total)
+            logger.exception(
+                "Error durante el intento con la credencial %s/%s. "
+                "Se detiene la rotación para evitar interpretar "
+                "un fallo técnico como un bloqueo de SUNARP.",
+                numero,
+                total,
+            )
             return False
+
         finally:
             if browser is not None and not sesion_entregada:
                 try:
@@ -1085,9 +1625,8 @@ async def iniciar_sesion_sunarp() -> SunarpSession | bool:
                         "El intento %s/%s no transfirió la sesión. "
                         "Se cerrará el navegador.",
                         numero,
-                        total,  
+                        total,
                     )
-
                     await cerrar_navegador(browser)
 
                 except Exception:
@@ -1097,25 +1636,31 @@ async def iniciar_sesion_sunarp() -> SunarpSession | bool:
                         numero,
                         total,
                     )
+
     if disponibles == 0:
-        logger.warning("No hay credenciales disponibles: todas alcanzaron el límite diario o tienen un bloqueo vigente.")
+        logger.warning(
+            "No hay credenciales disponibles: todas alcanzaron "
+            "el límite diario o tienen un bloqueo vigente."
+        )
     else:
-        logger.warning("Se agotaron las credenciales disponibles sin confirmar un acceso exitoso.")
+        logger.warning(
+            "Se agotaron las credenciales disponibles sin "
+            "confirmar un acceso exitoso."
+        )
+
     return False
+
 
 async def main() -> None:
     resultado = await iniciar_sesion_sunarp()
-
     if not isinstance(resultado, SunarpSession):
         logger.error("No se obtuvo una sesión autenticada.")
         return
-
     try:
         logger.info("Autenticación correcta. Navegador abierto.")
         await asyncio.sleep(2)
     finally:
         await cerrar_navegador(resultado.browser)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

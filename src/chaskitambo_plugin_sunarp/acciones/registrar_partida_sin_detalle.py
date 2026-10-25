@@ -1,6 +1,4 @@
-
 from __future__ import annotations
-
 import json
 import logging
 import os
@@ -18,7 +16,7 @@ DIRECTORIO_REVISION = BASE_DIR / "revisar_manualmente"
 ARCHIVO_PARTIDAS = DIRECTORIO_REVISION / "partidas_sin_detalle.json"
 
 
-def registrar_partida_sin_detalle(
+async def registrar_partida_sin_detalle(
     partida_registral: str,
     expediente: str | None = None,
 ) -> bool:

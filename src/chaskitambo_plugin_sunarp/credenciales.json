@@ -5,9 +5,10 @@
     "digito": "0",
     "fecha_nacimiento": "30061982",
     "fecha_emision": "30061982",
-    "ingresos_ciclo": 4,
-    "timestamp_primer_ingreso": 1792308483.4478018,
-    "fecha_ciclo": "2026-10-18"
+    "ingresos_ciclo": 2,
+    "timestamp_primer_ingreso": 1792819340.5144153,
+    "fecha_ciclo": "2026-10-24",
+    "bloqueado_hasta": 1792964231.5822496
   },
   {
     "nombre_registrado": "DANTE VIRGILIO MANRIQUE ORELLANO",
@@ -15,9 +16,9 @@
     "digito": "2",
     "fecha_nacimiento": "30061982",
     "fecha_emision": "30061982",
-    "ingresos_ciclo": 3,
-    "timestamp_primer_ingreso": 1792302292.62736,
-    "fecha_ciclo": "2026-10-18"
+    "ingresos_ciclo": 5,
+    "timestamp_primer_ingreso": 1792933247.1135387,
+    "fecha_ciclo": "2026-10-25"
   },
   {
     "nombre_registrado": "DANTE VIRGILIO MANRIQUE ORELLANO",
@@ -25,9 +26,9 @@
     "digito": "1",
     "fecha_nacimiento": "30061982",
     "fecha_emision": "30061982",
-    "ingresos_ciclo": 2,
-    "timestamp_primer_ingreso": 1792288695.1268299,
-    "fecha_ciclo": "2026-10-17"
+    "ingresos_ciclo": 1,
+    "timestamp_primer_ingreso": 1792936485.1433837,
+    "fecha_ciclo": "2026-10-25"
   },
   {
     "nombre_registrado": "DANTE VIRGILIO MANRIQUE ORELLANO",
